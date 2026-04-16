@@ -266,7 +266,9 @@ local function createMMU(apu: ApuRef?): MmuInterface
 		elseif addr >= 0xFEA0 and addr < 0xFF00 then
 			return
 		else
-			if addr >= 0x8000 and addr < 0xA000 then vramWrites = vramWrites + 1 end
+			if addr >= 0x8000 and addr < 0xA000 and buffer.readu8(mem, addr) ~= val then
+				vramWrites = vramWrites + 1
+			end
 			buffer.writeu8(mem, addr, val)
 		end
 	end

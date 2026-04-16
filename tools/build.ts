@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const SRC_DIR = path.join(__dirname, '../src');
-const MAIN_FILE = path.join(__dirname, '../Main.local.lua');
+const MAIN_FILE = path.join(__dirname, '../Main.local.luau');
 
 function getAllFiles(dirPath: string, arrayOfFiles: string[] = []) {
     const files = fs.readdirSync(dirPath);
@@ -11,7 +11,7 @@ function getAllFiles(dirPath: string, arrayOfFiles: string[] = []) {
         const fullPath = path.join(dirPath, file);
         if (fs.statSync(fullPath).isDirectory()) {
             arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-        } else if (fullPath.endsWith('.lua')) {
+        } else if (fullPath.endsWith('.luau')) {
             arrayOfFiles.push(fullPath);
         }
     });
@@ -24,7 +24,7 @@ function build() {
     const modules: Record<string, string> = {};
 
     for (const file of luaFiles) {
-        const basename = path.basename(file, '.lua');
+        const basename = path.basename(file, '.luau');
         const content = fs.readFileSync(file, 'utf8');
         modules[basename] = content;
         console.log(`- Included ${basename}`);
@@ -36,7 +36,7 @@ function build() {
     const startIndex = mainContent.indexOf(startPattern);
     
     if (startIndex === -1) {
-        throw new Error('Could not find moduleSources declaration in Main.local.lua');
+        throw new Error('Could not find moduleSources declaration in Main.local.luau');
     }
 
     const endPattern = '\n}';

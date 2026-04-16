@@ -6,7 +6,7 @@ local bor = bit32.bor
 local base = "https://raw.githubusercontent.com/xaviersupreme/LunarDMG/main/src/"
 
 local function req(name: string): any
-	local url = base .. name .. ".lua?t=" .. tostring(math.random(1, 999999999))
+	local url = base .. name .. ".luau?t=" .. tostring(math.random(1, 999999999))
 	local fn = assert(loadstring(game:HttpGet(url)))
 	local result = fn()
 	return result
@@ -287,28 +287,76 @@ local function BootROM(fileName: string): ()
 	local cyclesPerScan: number = 456
 	local cpuHz: number = 4194304
 	local maxFrameCatchUp: number = cyclesPerFrame * 3
+	local mmuRead8: (addr: number) -> number = mmu.Read8
+	local mmuWrite8: (addr: number, val: number) -> () = mmu.Write8
+	local mmuTick: (cycles: number) -> () = mmu.Tick
+	local mmuIsSaveDirty: () -> boolean = mmu.IsSaveDirty
+	local cpuStep: () -> number = cpu.Step
+	local ppuUpdatePositions: () -> () = ppu.UpdatePositions
+	local ppuRenderFrame: (mmuRef: any, lineStates: any) -> () = ppu.RenderFrame
+	local uiShowStats: () -> boolean = ui.showStats
+	local uiSetStatsText: (text: string) -> () = ui.setStatsText
+	local uiUseRasterEffects: () -> boolean = ui.useRasterEffects
 
 	local frameAccum: number = 0
 	local cycleBudget: number = 0
 	local renderCooldown: number = 0
-	local captureLineStates: { [number]: any } = table.create(144)
-	local renderLineStates: { [number]: any } = table.create(144)
+	local function createLineStateBuffer(): { [number]: any }
+		local states: { [number]: any } = table.create(144)
+		for i = 1, 144 do
+			states[i] = {
+				lcdc = 0x91,
+				scx = 0,
+				scy = 0,
+				wx = 0,
+				wy = 0,
+				bgp = 0xFC,
+				obp0 = 0xFF,
+				obp1 = 0xFF,
+			}
+		end
+		return states
+	end
+
+	local function seedLineStates(states: { [number]: any }): ()
+		local lcdc: number = mmuRead8(0xFF40)
+		local scx: number = mmuRead8(0xFF43)
+		local scy: number = mmuRead8(0xFF42)
+		local wx: number = mmuRead8(0xFF4B)
+		local wy: number = mmuRead8(0xFF4A)
+		local bgp: number = mmuRead8(0xFF47)
+		local obp0: number = mmuRead8(0xFF48)
+		local obp1: number = mmuRead8(0xFF49)
+		for i = 1, 144 do
+			local state = states[i]
+			state.lcdc = lcdc
+			state.scx = scx
+			state.scy = scy
+			state.wx = wx
+			state.wy = wy
+			state.bgp = bgp
+			state.obp0 = obp0
+			state.obp1 = obp1
+		end
+	end
+
+	local captureLineStates: { [number]: any } = createLineStateBuffer()
+	local renderLineStates: { [number]: any } = createLineStateBuffer()
 	local prevLy: number = 0
 	local prevMode: number = 0
 	local prevLycMatch: boolean = false
+	local prevStatCtrl: number = 0
 	local vblankCount: number = 0
 
 	local function requestStatInterrupt(): ()
-		mmu.Write8(0xFF0F, bor(mmu.Read8(0xFF0F), 0x02))
+		mmuWrite8(0xFF0F, bor(mmuRead8(0xFF0F), 0x02))
 	end
 
 	local function updateLcdState(): ()
 		local ly: number = math.floor(frameAccum / cyclesPerScan) % 154
 		local lineCycle: number = frameAccum % cyclesPerScan
-		local statCtrl: number = band(mmu.Read8(0xFF41), 0xF8)
+		local statCtrl: number = band(mmuRead8(0xFF41), 0xF8)
 		local mode: number
-
-		mmu.Write8(0xFF44, ly)
 
 		if ly >= 144 then
 			mode = 1
@@ -320,31 +368,38 @@ local function BootROM(fileName: string): ()
 			mode = 0
 		end
 
+		local lycMatch: boolean = ly == mmuRead8(0xFF45)
+		if ly == prevLy and mode == prevMode and lycMatch == prevLycMatch and statCtrl == prevStatCtrl then
+			return
+		end
+
+		if ly ~= prevLy then
+			mmuWrite8(0xFF44, ly)
+		end
+
 		if ly >= 144 and prevLy < 144 then
-			mmu.Write8(0xFF0F, bor(mmu.Read8(0xFF0F), 0x01))
+			mmuWrite8(0xFF0F, bor(mmuRead8(0xFF0F), 0x01))
 			vblankCount = vblankCount + 1
 		end
 
-		local lycMatch: boolean = ly == mmu.Read8(0xFF45)
 		local nextStat: number = bor(statCtrl, mode)
 		if lycMatch then nextStat = bor(nextStat, 0x04) end
-		mmu.Write8(0xFF41, nextStat)
+		mmuWrite8(0xFF41, nextStat)
 
 		if lycMatch and not prevLycMatch and band(statCtrl, 0x40) ~= 0 then
 			requestStatInterrupt()
 		end
 
 		if ly < 144 and mode == 2 and (ly ~= prevLy or prevMode ~= 2) then
-			captureLineStates[ly + 1] = {
-				lcdc = mmu.Read8(0xFF40),
-				scx = mmu.Read8(0xFF43),
-				scy = mmu.Read8(0xFF42),
-				wx = mmu.Read8(0xFF4B),
-				wy = mmu.Read8(0xFF4A),
-				bgp = mmu.Read8(0xFF47),
-				obp0 = mmu.Read8(0xFF48),
-				obp1 = mmu.Read8(0xFF49),
-			}
+			local state = captureLineStates[ly + 1]
+			state.lcdc = mmuRead8(0xFF40)
+			state.scx = mmuRead8(0xFF43)
+			state.scy = mmuRead8(0xFF42)
+			state.wx = mmuRead8(0xFF4B)
+			state.wy = mmuRead8(0xFF4A)
+			state.bgp = mmuRead8(0xFF47)
+			state.obp0 = mmuRead8(0xFF48)
+			state.obp1 = mmuRead8(0xFF49)
 		end
 
 		if mode ~= prevMode then
@@ -360,7 +415,11 @@ local function BootROM(fileName: string): ()
 		prevLy = ly
 		prevMode = mode
 		prevLycMatch = lycMatch
+		prevStatCtrl = statCtrl
 	end
+
+	seedLineStates(captureLineStates)
+	seedLineStates(renderLineStates)
 
 	while isRunning do
 		local deltaTime: number = if shouldUseVsync() then runService.RenderStepped:Wait() else runService.Heartbeat:Wait()
@@ -369,7 +428,7 @@ local function BootROM(fileName: string): ()
 		local fpsCap: number = getFpsCap()
 
 		refreshInputBlock()
-		ppu.UpdatePositions()
+		ppuUpdatePositions()
 		if fpsCap > 0 then
 			renderCooldown = math.max(renderCooldown - safeDelta, 0)
 		else
@@ -378,9 +437,9 @@ local function BootROM(fileName: string): ()
 
 		cycleBudget = math.min(cycleBudget + safeDelta * cpuHz, maxFrameCatchUp)
 		while isRunning and cycleBudget >= 4 do
-			local elapsed: number = cpu.Step()
+			local elapsed: number = cpuStep()
 			cycleBudget = cycleBudget - elapsed
-			mmu.Tick(elapsed)
+			mmuTick(elapsed)
 			frameAccum = frameAccum + elapsed
 			updateLcdState()
 			if frameAccum >= cyclesPerFrame then
@@ -388,9 +447,6 @@ local function BootROM(fileName: string): ()
 				local nextCaptureLineStates: { [number]: any } = renderLineStates
 				renderLineStates = captureLineStates
 				captureLineStates = nextCaptureLineStates
-				for i = 1, 144 do
-					captureLineStates[i] = nil
-				end
 				if fpsCap <= 0 or renderCooldown <= 0 then
 					shouldRender = true
 					if fpsCap > 0 then
@@ -400,21 +456,21 @@ local function BootROM(fileName: string): ()
 			end
 		end
 
-		if mmu.IsSaveDirty() and os.clock() - lastSaveFlush >= 1.0 then
+		if mmuIsSaveDirty() and os.clock() - lastSaveFlush >= 1.0 then
 			flushSave(false)
 		end
 
 		if shouldRender then
-			local lcdc: number = mmu.Read8(0xFF40)
+			local lcdc: number = mmuRead8(0xFF40)
 			if band(lcdc, 0x80) ~= 0 then
-				ppu.RenderFrame(mmu, renderLineStates)
+				ppuRenderFrame(mmu, renderLineStates)
 			end
 
-			if ui.showStats() then
+			if uiShowStats() then
 				local fpsCapLabel: string = fpsCap <= 0 and "uncapped" or string.format("%dfps", fpsCap)
-				ui.setStatsText(string.format("FPS %d  %s  %s  %s", vblankCount % 1000, ui.useRasterEffects() and "accurate" or "fast", shouldUseVsync() and "vsync" or "free", fpsCapLabel))
+				uiSetStatsText(string.format("FPS %d  %s  %s  %s", vblankCount % 1000, uiUseRasterEffects() and "accurate" or "fast", shouldUseVsync() and "vsync" or "free", fpsCapLabel))
 			else
-				ui.setStatsText("")
+				uiSetStatsText("")
 			end
 		end
 	end
