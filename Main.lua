@@ -9,7 +9,6 @@ local function req(name: string): any
 	local url = base .. name .. ".lua?t=" .. tostring(math.random(1, 999999999))
 	local fn = assert(loadstring(game:HttpGet(url)))
 	local result = fn()
-	assert(type(result) == "function", name .. " returned " .. type(result))
 	return result
 end
 

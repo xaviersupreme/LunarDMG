@@ -2156,8 +2156,8 @@ return createUI
 
 local modulePaths = {
 	CPU = "core/CPU",
-	MMU = "hardware/MMU",
-	PPU = "video/PPU",
+	MMU = "core/MMU",
+	PPU = "media/PPU",
 	UI = "ui/UI",
 }
 
